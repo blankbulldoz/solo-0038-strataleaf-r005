@@ -6,12 +6,52 @@ from .indexes import refresh_document
 from .mvcc import latest_row
 from .schema import validate_document
 
-
 @dataclass(frozen=True)
 class CommitResult:
     revision: int
     count: int
     replayed: bool = False
+
+
+def check_expected(expected):
+    if expected is None:
+        return
+    if isinstance(expected, bool) or not isinstance(expected, int) or expected < 0:
+        raise InvalidDocument("expected revision must be nonnegative or None")
+
+
+def verify_operations(connection, head, operations):
+    """Validate every operation against the revision view at ``head``."""
+    for op in operations:
+        schema = connection.execute("SELECT schema FROM collections WHERE name=?", (op["collection"],)).fetchone()
+        if schema is None:
+            raise NotFound("unknown collection: " + op["collection"])
+        old = latest_row(connection, op["collection"], op["key"], head)
+        current = old["rev"] if old is not None else 0
+        expected = op["expected"]
+        if expected is not None and expected != current:
+            raise Conflict(f"revision conflict for {op['collection']}/{op['key']}: expected {expected}, found {current}")
+        if op["document"] is not None:
+            validate_document(op["document"], loads(schema[0]))
+
+
+def apply_operations(connection, revision, operations):
+    for op in operations:
+        body = dumps(op["document"]) if op["document"] is not None else None
+        connection.execute("INSERT INTO versions VALUES (?,?,?,?,?)",
+                           (op["collection"], op["key"], revision, body, op["expires_at"]))
+        refresh_document(connection, op["collection"], op["key"], op["document"])
+
+
+def record_commit(connection, revision, operations, request_key, fingerprint, merge=None):
+    payload = {"revision": revision, "operations": operations}
+    if merge is not None:
+        payload["merge"] = merge
+    connection.execute("INSERT INTO commits VALUES (?,?,?,?)",
+                       (revision, dumps(payload), request_key, fingerprint))
+    if request_key is not None:
+        connection.execute("INSERT INTO receipts VALUES (?,?,?,?)",
+                           (request_key, revision, fingerprint, len(operations)))
 
 
 class WriteBatch:
@@ -27,9 +67,7 @@ class WriteBatch:
         identity = (operation["collection"], operation["key"])
         if any((op["collection"], op["key"]) == identity for op in self.operations):
             raise InvalidDocument("one operation per document per batch")
-        expected = operation["expected"]
-        if expected is not None and (isinstance(expected, bool) or not isinstance(expected, int) or expected < 0):
-            raise InvalidDocument("expected revision must be nonnegative or None")
+        check_expected(operation["expected"])
         self.operations.append(operation)
         return self
 
@@ -69,27 +107,10 @@ class WriteBatch:
                         self.state = "committed"
                         return CommitResult(prior["rev"], prior["count"], True)
                 head = int(self.store.get("head"))
-                for op in self.operations:
-                    schema = connection.execute("SELECT schema FROM collections WHERE name=?", (op["collection"],)).fetchone()
-                    if schema is None:
-                        raise NotFound("unknown collection: " + op["collection"])
-                    old = latest_row(connection, op["collection"], op["key"], head)
-                    current = old["rev"] if old is not None else 0
-                    if op["expected"] is not None and op["expected"] != current:
-                        raise Conflict(f"revision conflict for {op['collection']}/{op['key']}: expected {op['expected']}, found {current}")
-                    if op["document"] is not None:
-                        validate_document(op["document"], loads(schema[0]))
+                verify_operations(connection, head, self.operations)
                 revision = head + 1
-                for op in self.operations:
-                    body = dumps(op["document"]) if op["document"] is not None else None
-                    connection.execute("INSERT INTO versions VALUES (?,?,?,?,?)",
-                                       (op["collection"], op["key"], revision, body, op["expires_at"]))
-                    refresh_document(connection, op["collection"], op["key"], op["document"])
-                payload = {"revision": revision, "operations": self.operations}
-                connection.execute("INSERT INTO commits VALUES (?,?,?,?)",
-                                   (revision, dumps(payload), self.request_key, fingerprint))
-                if self.request_key is not None:
-                    connection.execute("INSERT INTO receipts VALUES (?,?,?,?)", (self.request_key, revision, fingerprint, len(self.operations)))
+                apply_operations(connection, revision, self.operations)
+                record_commit(connection, revision, self.operations, self.request_key, fingerprint)
                 self.store.set("head", revision)
         except BaseException:
             self.state = "aborted"

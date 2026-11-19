@@ -2,7 +2,8 @@ import json
 import sys
 import tempfile
 from pathlib import Path
-from strataleaf import Database, Archives, Conflict, InvalidDocument, InvalidCursor, ReadOnly, SnapshotTooOld, ReplicationError
+from strataleaf import (Database, Archives, Conflict, InvalidDocument, InvalidCursor, MergeConflict,
+                        ReadOnly, SnapshotTooOld, ReplicationError)
 
 SCHEMA = {"fields": {"region": "string", "sequence": "integer", "code": "string"}, "required": ["region", "sequence"]}
 
@@ -137,6 +138,51 @@ def run(flow):
                 output = {"inspection": db.diagnostics.inspect(deep=True), "fingerprint": db.diagnostics.fingerprint(), "checkpoint": db.checkpoint()}
                 if not output["inspection"]["ok"]:
                     raise RuntimeError("integrity inspection failed")
+            elif flow == "branch":
+                base = db.revision
+                created = db.branches.create("reviewed", base)
+                edits = [("segments", "seg_00", {"region": "east", "sequence": 40, "code": "c0"}),
+                         ("segments", "seg_06", {"region": "north", "sequence": 6, "code": "c6"})]
+                first = db.branches.batch("reviewed", "branch_edit")
+                for collection, key, document in edits:
+                    first.put(collection, key, document)
+                committed = first.commit()
+                second = db.branches.batch("reviewed", "branch_edit")
+                for collection, key, document in edits:
+                    second.put(collection, key, document)
+                replayed = second.commit()
+                widened = {**SCHEMA, "fields": {**SCHEMA["fields"], "reviewer": "string"}}
+                catalog = db.branches.refresh_catalog("reviewed", {"segments": widened})
+                db.branches.batch("reviewed").put(
+                    "segments", "seg_06", {"region": "north", "sequence": 6, "code": "c6", "reviewer": "ops"}).commit()
+                clone = db.branches.clone("reviewed", "mirror")
+                db.batch().put("segments", "seg_00", {"region": "south", "sequence": 99, "code": "c0"}).commit()
+                before = (db.revision, db.get("segments", "seg_00").document)
+                preview = db.branches.preview("reviewed")
+                try:
+                    db.branches.merge("reviewed")
+                except MergeConflict as exc:
+                    conflict = {"error": type(exc).__name__, "message": str(exc),
+                                "conflicts": exc.conflicts, "plan": exc.plan.get("operations")}
+                else:
+                    raise RuntimeError("expected a three-way merge conflict")
+                sealed = db.branches.seal("reviewed")
+                changed = (db.revision, db.get("segments", "seg_00").document) != before
+                resolutions = [{"collection": "segments", "key": "seg_00", "action": "take_branch"}]
+                resolved = db.branches.merge("reviewed", request_key="merge_reviewed", resolutions=resolutions)
+                duplicate = db.branches.merge("reviewed", request_key="merge_reviewed", resolutions=resolutions)
+                if changed or resolved["applied"] != 2 or not duplicate["replayed"]:
+                    raise RuntimeError("branch merge changed state on conflict or repeated writes")
+                if db.get("segments", "seg_00").document["sequence"] != 40:
+                    raise RuntimeError("resolved branch merge produced unexpected state")
+                if db.get("segments", "seg_06").document.get("reviewer") != "ops" or not db.diagnostics.inspect(True)["ok"]:
+                    raise RuntimeError("branch-only catalog state did not merge as a normal commit")
+                output = {"branch": created, "committed": committed.__dict__, "replayed": replayed.__dict__,
+                          "branch_catalog": catalog, "clone": clone, "preview": preview, "conflict": conflict,
+                          "main_unchanged_on_conflict": not changed, "seal": sealed,
+                          "resolved": resolved, "duplicate": duplicate,
+                          "document": db.get("segments", "seg_00").document,
+                          "merges": db.branches.merges(), "inspection": db.diagnostics.inspect(True)}
             elif flow == "transfer":
                 exported = db.transfer.export_lines("segments")
                 db.catalog.create("copy_segments", SCHEMA)

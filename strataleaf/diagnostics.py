@@ -12,7 +12,8 @@ class Diagnostics:
             integrity = [row[0] for row in connection.execute("PRAGMA integrity_check" if deep else "PRAGMA quick_check")]
             references = [tuple(row) for row in connection.execute("PRAGMA foreign_key_check")]
             counts = {table: connection.execute("SELECT COUNT(*) FROM " + table).fetchone()[0]
-                      for table in ("collections", "versions", "commits", "index_defs", "index_values", "pins", "consumers")}
+                      for table in ("collections", "versions", "commits", "index_defs", "index_values",
+                                    "pins", "consumers", "branches", "branch_versions")}
             revisions = [row[0] for row in connection.execute("SELECT rev FROM commits WHERE rev>? ORDER BY rev", (floor,))]
             issues = []
             if revisions != list(range(floor + 1, head + 1)):
@@ -26,6 +27,9 @@ class Diagnostics:
             for pin in connection.execute("SELECT name,rev FROM pins"):
                 if not floor <= pin["rev"] <= head:
                     issues.append("read pin outside retained history: " + pin["name"])
+            for branch in connection.execute("SELECT name,base,head_rev FROM branches"):
+                if not floor <= branch["base"] <= branch["head_rev"]:
+                    issues.append("branch base outside retained history: " + branch["name"])
             if deep:
                 expected = set()
                 for definition in connection.execute("SELECT * FROM index_defs"):

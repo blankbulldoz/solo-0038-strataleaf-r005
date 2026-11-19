@@ -19,7 +19,8 @@
       "同一历史读版本完成分组和数值计算",
       "读后修改受版本前置条件保护",
       "物理完整性与逻辑引用一致性可观察",
-      "外部文档流验证后整批导入"
+      "外部文档流验证后整批导入",
+      "从历史修订分支并以可检查冲突合并回主库"
     ]
   },
   "project_shape": "backend",
@@ -194,6 +195,18 @@
         "expire",
         "aggregate",
         "inspect"
+      ]
+    },
+    {
+      "id": "branch",
+      "path": "strataleaf/branch.py",
+      "responsibility": "历史起点分支、分支目录、分支提交与三方合并",
+      "owned_facts": "共同起点、分支模式与修订命名空间、合并冲突",
+      "consumers": [
+        "branch",
+        "retention",
+        "archive",
+        "database"
       ]
     },
     {
@@ -513,6 +526,26 @@
       "success": "外部文档流验证后整批导入",
       "failure": "重复键整体拒绝",
       "verification": "python3 -m examples.workflows transfer"
+    },
+    {
+      "id": "branch",
+      "name": "分支合并",
+      "entry": "Database.branches.merge",
+      "module_ids": [
+        "branch",
+        "transaction",
+        "indexes",
+        "schema",
+        "storage"
+      ],
+      "steps": [
+        "输入校验与读取已有事实",
+        "共同起点、主库 head 与分支 head 三方比较",
+        "形成可观察结果"
+      ],
+      "success": "无冲突分支结果作为单个可追溯提交落地",
+      "failure": "逐键冲突或模式/唯一索引不兼容拒绝且不改主库",
+      "verification": "python3 -m examples.workflows branch"
     }
   ],
   "complexity": {

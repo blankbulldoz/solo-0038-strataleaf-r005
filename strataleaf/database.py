@@ -1,5 +1,6 @@
 from .aggregate import Aggregates
 from .archive import Archives
+from .branch import Branches
 from .catalog import Catalog
 from .diagnostics import Diagnostics
 from .feeds import ChangeFeed
@@ -27,6 +28,7 @@ class Database:
         self.aggregates = Aggregates(self._store)
         self.transfer = Transfer(self._store)
         self.diagnostics = Diagnostics(self._store)
+        self.branches = Branches(self._store)
         self._queries = QueryEngine(self._store)
 
     @property

@@ -24,6 +24,25 @@ CREATE TABLE IF NOT EXISTS index_values (
 CREATE INDEX IF NOT EXISTS index_document ON index_values(collection,key);
 CREATE TABLE IF NOT EXISTS pins (name TEXT PRIMARY KEY, rev INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS consumers (name TEXT PRIMARY KEY, ack INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS branches (
+ name TEXT PRIMARY KEY, token TEXT NOT NULL, base INTEGER NOT NULL, head_rev INTEGER NOT NULL,
+ synced TEXT, applied_rev INTEGER, sealed INTEGER NOT NULL, sealed_digest TEXT);
+CREATE TABLE IF NOT EXISTS branch_catalog (
+ branch TEXT NOT NULL, name TEXT NOT NULL, schema TEXT NOT NULL, generation INTEGER NOT NULL,
+ PRIMARY KEY(branch, name));
+CREATE TABLE IF NOT EXISTS branch_versions (
+ branch TEXT NOT NULL, collection TEXT NOT NULL, key TEXT NOT NULL, rev INTEGER NOT NULL,
+ body TEXT, expires REAL, PRIMARY KEY(branch, collection, key, rev));
+CREATE TABLE IF NOT EXISTS branch_commits (
+ branch TEXT NOT NULL, rev INTEGER NOT NULL, payload TEXT NOT NULL, request_key TEXT, request_hash TEXT,
+ PRIMARY KEY(branch, rev));
+CREATE TABLE IF NOT EXISTS branch_receipts (
+ branch TEXT NOT NULL, request_key TEXT NOT NULL, rev INTEGER NOT NULL, request_hash TEXT NOT NULL,
+ count INTEGER NOT NULL, PRIMARY KEY(branch, request_key));
+CREATE TABLE IF NOT EXISTS branch_merges (
+ branch TEXT NOT NULL, token TEXT NOT NULL, branch_rev INTEGER NOT NULL, scope TEXT NOT NULL,
+ request_key TEXT NOT NULL, request_hash TEXT NOT NULL, revision INTEGER NOT NULL, outcome TEXT NOT NULL,
+ count INTEGER NOT NULL, base INTEGER NOT NULL, PRIMARY KEY(branch, token, branch_rev, scope));
 """
 
 

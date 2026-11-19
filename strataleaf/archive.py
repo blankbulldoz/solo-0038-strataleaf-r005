@@ -84,8 +84,11 @@ class Archives:
             if not follower:
                 target.execute("UPDATE meta SET value=? WHERE key='database_id'", (str(uuid.uuid4()),))
                 target.execute("UPDATE meta SET value=? WHERE key='cursor_secret'", (secrets.token_hex(32),))
-            target.execute("DELETE FROM pins")
-            target.execute("DELETE FROM consumers")
+            present = {row[0] for row in target.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            for table in ("pins", "consumers", "branch_receipts", "branch_commits", "branch_versions",
+                          "branch_catalog", "branches", "branch_merges"):
+                if table in present:
+                    target.execute("DELETE FROM " + table)
             target.commit()
             target.close()
             target = None

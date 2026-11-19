@@ -23,13 +23,31 @@ with Database("strataleaf.db") as db:
     db.retention.unpin("reader_a")
 ```
 
+分支与合并：
+
+```python
+with Database("strataleaf.db") as db:
+    base = db.revision
+    db.branches.create("review", base)
+    db.branches.batch("review").put(
+        "segments", "block_a", {"region": "east", "sequence": 5}, expected=base).commit()
+    db.branches.seal("review")
+    print(db.branches.preview("review"))          # 冲突与计划可检查
+    try:
+        db.branches.merge("review", request_key="merge-review")
+    except MergeConflict as exc:
+        print(exc.conflicts)
+        db.branches.merge("review", request_key="merge-review", resolutions=[
+            {"collection": "segments", "key": "block_a", "action": "take_branch"}])
+```
+
 集合创建不是幂等操作；再次运行示例应使用新文件。`expected=0` 仅允许从未出现过的键；删除后保留墓碑版本，再创建必须指定墓碑版本或不带前置版本。没有 `expected` 的写入采用最后提交覆盖，读后修改应携带读取到的版本。
 
 ## 工作流
 
 `python3 -m compileall -q strataleaf examples` 检查源码可编译。`python3 -m examples.workflows commit` 在独立临时目录运行多集合提交、重复请求和回滚示例，打印实际结果后自动清理。可用示例名：
 
-`catalog schema commit snapshot query index feed backup replica compact expire aggregate patch inspect transfer`
+`catalog schema commit snapshot query index feed backup replica compact expire aggregate patch inspect transfer branch`
 
 每个示例约一秒以内，不需要联网。它们是生产 API 的有限工作流演示；自动化测试仍为 **deferred**，仓库不含测试套件，也不声明测试命令。`examples.observations` 另外提供写锁竞争与保留水位的可复现观测。
 
@@ -44,6 +62,9 @@ with Database("strataleaf.db") as db:
 - 变更流一次交付完整提交，消费方负责成功处理后确认；确认可前进到当前 head，系统不替消费方证明处理成功。释放消费者即放弃它的历史保护。
 - 备份使用 SQLite 在线备份 API，发布到未占用目标；校验摘要后恢复到新文件，禁止覆盖现有文件。恢复为新主库会生成新的数据库标识及游标签名密钥，保留文档版本；恢复为副本则绑定原主库。进程间不得直接复制活动 WAL 主文件代替备份。
 - 副本只能接收同一上游、连续的提交包。重复范围不重复写入；校验错误和缺口整包失败。分段追赶时使用版本扫描，追到导出端 head 才安装最新索引。目录 epoch 防止过时的同版本包倒退目录。副本不接收主库写入；基线不提供提升接口、双向复制或网络传输。导出校验和检测意外损坏，不代替对端身份认证。
+- 数据分支由 `branches.create(name, from_revision)` 显式绑定历史修订作为共同起点，分支内 `branches.batch(name)` 写入独立修订，不分配主库修订、不改变主库当前值或索引；分支可 `seal` 记录摘要，`branches.clone(source, name)` 从另一分支当前状态建立新分支。分支持有自己的模式目录：`branches.refresh_catalog` 可采纳主库当前模式（或显式传入放宽的模式，如新增可选字段），只影响后续分支写入，不改变主库目录。`branches.merge` 以共同起点、当前主库 head 与分支 head 三方比较每个键：只有分支改动的键前进一步，主库已改动或删除的同一键报 `MergeConflict`，错误对象按 `update_vs_update`、`update_vs_delete`、`delete_vs_update`、`add_vs_add` 分类并携带 base/main/branch 值，主库保持原样。`preview` 返回同样的可检查冲突与待执行操作。
+- 冲突处理入口是按 (集合, 键) 的 `resolutions`：`take_branch`、`take_main`、`take_document`（显式文档）或 `delete`。合并计划随后按主库当前模式与唯一索引复核；分支遗留文档不满足收紧后的模式或与主库当前唯一值冲突时同样报冲突，不能把分支文件直接覆盖回主库。无冲突与已解决的结果作为一次带 `merge` 元数据的普通提交落地，出现在变更流中并受幂等键去重；同一分支同一范围重复合并返回原提交而不新增修订。失败或冲突不消耗修订号。
+- 分支共同起点计入回收水位阻塞项；`retention.compact` 不会回收仍被活分支引用的 base。回收后再合并明确失败。备份不携带分支状态，恢复后分支与合并回执被清理。
 - SQLite 保证进程间单写者；同一句柄的锁协调线程操作，多个句柄通过 SQLite 锁协调。长读可能延缓 WAL checkpoint；忙超时由连接 timeout 控制，调用方处理 `sqlite3.OperationalError`。
 - 当前实现适合本地中小型嵌入式数据集，版本扫描、分组和逻辑导出会物化输入；不承诺常数内存。单文档上限 1 MiB、深度 32；筛选按键排序。磁盘加密、租户鉴权、分布式共识均不在现有承诺内。
 

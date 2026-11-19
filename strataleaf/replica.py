@@ -27,12 +27,15 @@ class Replication:
             body = envelope["body"]
             if envelope["sha256"] != digest(body) or body["format"] != 1:
                 raise ReplicationError("replication envelope checksum/format mismatch")
+            source = body.get("source")
+            if not isinstance(source, str) or not source:
+                raise ReplicationError("replication envelope has no source identity")
             commits = body["commits"]
             expected = list(range(body["since"] + 1, body["through"] + 1))
             if [item["revision"] for item in commits] != expected or body["through"] > body["head"]:
                 raise ReplicationError("replication envelope has a revision gap")
             with self.store.atomic() as connection:
-                if self.store.get("mode") != "replica" or self.store.get("upstream") != body["source"]:
+                if self.store.get("mode") != "replica" or self.store.get("upstream") != source:
                     raise ReplicationError("envelope does not match configured upstream")
                 head = int(self.store.get("head"))
                 if body["since"] > head:

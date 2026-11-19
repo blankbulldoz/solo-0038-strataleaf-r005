@@ -7,6 +7,14 @@ class InvalidDocument(DatabaseError):
 class Conflict(DatabaseError):
     pass
 
+class MergeConflict(Conflict):
+    """A branch merge needs explicit resolution; the main database was not changed."""
+
+    def __init__(self, message, conflicts=None, plan=None):
+        super().__init__(message)
+        self.conflicts = list(conflicts or [])
+        self.plan = plan or {}
+
 class NotFound(DatabaseError):
     pass
 
